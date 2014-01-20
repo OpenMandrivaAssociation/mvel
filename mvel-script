@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# mvel script
+# gil
+
+# Source functions library
+. /usr/share/java-utils/java-functions
+
+# Source system prefs
+if [ -f /etc/mvel.conf ] ; then
+  . /etc/mvel.conf
+fi
+
+# Source user prefs
+if [ -f $HOME/.mvelrc ] ; then
+  . $HOME/.mvelrc
+fi
+
+# Configuration
+MAIN_CLASS=org.mvel2.sh.Main
+BASE_JARS="mvel objectweb-asm/asm objectweb-asm/asm-util"
+
+# Set parameters
+set_jvm
+set_classpath $BASE_JARS
+set_flags $BASE_FLAGS
+set_options $BASE_OPTIONS
+
+# Let's start
+run "$@"
