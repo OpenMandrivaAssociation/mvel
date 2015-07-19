@@ -4,7 +4,7 @@
 
 Name:          mvel
 Version:       2.2.2
-Release:       1.1
+Release:       1.2
 Summary:       MVFLEX Expression Language
 Group:         Development/Java
 License:       ASL 2.0
