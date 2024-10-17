@@ -8,7 +8,7 @@ Release:       1.3
 Summary:       MVFLEX Expression Language
 Group:         Development/Java
 License:       ASL 2.0
-Url:           http://mvel.codehaus.org/
+Url:           https://mvel.codehaus.org/
 Source0:       https://github.com/mvel/mvel/archive/%{name}2-%{namedversion}.tar.gz
 Source1:       %{name}-script
 Patch0:        %{name}-2.2.2.Final-use-system-asm.patch
