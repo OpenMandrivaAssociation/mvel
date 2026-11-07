@@ -1,111 +1,227 @@
-%{?_javapackages_macros:%_javapackages_macros}
-%global namedreltag .Final
-%global namedversion %{version}%{?namedreltag}
+Name:		mvel
+Version:	2.6.0.Final
+Release:	1
+Summary:	MVFLEX Expression Language
+Group:		Development/Java
+License:	ASL 2.0
+URL:		https://github.com/mvel/mvel
+Source0:	https://github.com/mvel/mvel/archive/refs/tags/mvel2-%{version}.tar.gz#/mvel-%{version}.tar.gz
 
-Name:          mvel
-Version:       2.2.2
-Release:       1.3
-Summary:       MVFLEX Expression Language
-Group:         Development/Java
-License:       ASL 2.0
-Url:           https://mvel.codehaus.org/
-Source0:       https://github.com/mvel/mvel/archive/%{name}2-%{namedversion}.tar.gz
-Source1:       %{name}-script
-Patch0:        %{name}-2.2.2.Final-use-system-asm.patch
-# remove tests which require internal objectweb-asm libraries
-Patch1:        %{name}-2.2.2.Final-tests.patch
+BuildArch:	noarch
+BuildRequires:	python
+# Literal, so the first rpmbuild -bs records them before sysjar is installed.
+BuildRequires:	maven
+BuildRequires:	java-current-devel
+# Compile dependency. ASM is not shaded into this jar.
+BuildRequires:	mvn(org.ow2.asm:asm)
+BuildSystem:	maven
+BuildOption(install):	--file-name mvel2 --link %{name}
 
-BuildRequires: mvn(org.ow2.asm:asm)
-BuildRequires: mvn(org.ow2.asm:asm-util)
-# test deps 
-BuildRequires: mvn(junit:junit)
-BuildRequires: mvn(com.thoughtworks.xstream:xstream)
-
-BuildRequires: maven-local
-BuildRequires: maven-plugin-bundle
-BuildRequires: maven-surefire-provider-junit
-BuildRequires: maven-surefire-report-plugin
-
-BuildArch:     noarch
+Obsoletes:	%{name}-javadoc < %{version}-%{release}
 
 %description
-MVEL is a powerful expression language for Java-based applications. It
-provides a plethora of features and is suited for everything from the
-smallest property binding and extraction, to full blown scripts.
-
-%package javadoc
-Summary:       Javadoc for %{name}
-
-%description javadoc
-This package contains javadoc for %{name}.
+MVEL is an expression language for Java applications. 2.6.0.Final
+requires Java 11. Make.Set._() was renamed to Make.Set._add() because
+underscore is reserved. This package uses the system ASM jar instead of
+shading it into org.mvel2.asm. Tests are skipped.
 
 %prep
-%setup -q -n %{name}-%{name}2-%{namedversion}
-find . -name "*.jar" -delete
-find . -name "*.class" -delete
+%autosetup -n mvel-mvel2-%{version}
+rm -f ASM-LICENSE.txt src/test/resources/eventing-example.jar
+python - <<'PY'
+import xml.etree.ElementTree as ET
+from pathlib import Path
 
-rm ASM-LICENSE.txt
-%patch0 -p1
-%patch1 -p1
+NS = "http://maven.apache.org/POM/4.0.0"
+ET.register_namespace("", NS)
+ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
 
-# See https://bugzilla.redhat.com/show_bug.cgi?id=1095339
-sed -i '/Unsafe/d' src/main/java/org/mvel2/util/JITClassLoader.java
+def q(name):
+    return "{" + NS + "}" + name
 
-# Uwanted
-%pom_remove_plugin :maven-source-plugin
-# Remove org.apache.maven.wagon:wagon-webdav:1.0-beta-2
-%pom_xpath_remove "pom:project/pom:build/pom:extensions"
+def local(tag):
+    return tag.rsplit("}", 1)[-1]
 
-sed -i 's/\r//' LICENSE.txt
+def children(elem, name):
+    return [child for child in list(elem) if local(child.tag) == name]
 
-# fix non ASCII chars
-native2ascii -encoding UTF8 src/main/java/org/mvel2/sh/ShellSession.java src/main/java/org/mvel2/sh/ShellSession.java
+def one(elem, name):
+    found = children(elem, name)
+    if not found:
+        return None
+    return found[0]
 
-%build
+def text_of(elem, name):
+    node = one(elem, name)
+    if node is None or node.text is None:
+        return ""
+    return node.text.strip()
 
-%mvn_file :%{name}2 %{name}
-# Tests fails only on ARM builder
-%mvn_build -f
+drop = {
+    "maven-enforcer-plugin",
+    "maven-source-plugin",
+    "maven-shade-plugin",
+    "maven-surefire-plugin",
+    "maven-release-plugin",
+    "maven-bundle-plugin",
+    "maven-gpg-plugin",
+    "maven-javadoc-plugin",
+    "maven-surefire-report-plugin",
+}
 
-%install
-%mvn_install
+dummy = Path("src/main/java/org/mvel2/asm/Dummy.java")
+if not dummy.is_file():
+    raise SystemExit("missing shaded-asm placeholder")
+dummy.unlink()
+asm_dir = dummy.parent
+if asm_dir.is_dir() and not any(asm_dir.iterdir()):
+    asm_dir.rmdir()
 
+java_files = list(Path("src/main/java").rglob("*.java"))
+if len(java_files) != 329:
+    raise SystemExit("java files " + str(len(java_files)))
+
+tree = ET.parse("pom.xml")
+root = tree.getroot()
+for reporting in children(root, "reporting"):
+    root.remove(reporting)
+for profiles in children(root, "profiles"):
+    root.remove(profiles)
+props = one(root, "properties")
+if props is not None:
+    drop_props = {
+        "wagon-webdav.version",
+        "maven-enforcer-plugin.version",
+        "maven-source-plugin.version",
+        "maven-surefire-plugin.version",
+        "maven-release-plugin.version",
+        "maven-bundle-plugin.version",
+        "maven-surefire-report-plugin.version",
+        "maven-javadoc-plugin.version",
+        "maven-gpg-plugin.version",
+        "maven-shade-plugin.version",
+    }
+    for node in list(props):
+        if local(node.tag) in drop_props:
+            props.remove(node)
+deps = one(root, "dependencies")
+if deps is None:
+    raise SystemExit("no dependencies")
+saw_asm = False
+for dep in list(deps):
+    art = text_of(dep, "artifactId")
+    if art == "junit":
+        deps.remove(dep)
+        continue
+    if art == "asm" and text_of(dep, "groupId") == "org.ow2.asm":
+        saw_asm = True
+        ver = one(dep, "version")
+        if ver is None:
+            raise SystemExit("asm dependency has no version")
+        ver.text = "9.11.1"
+if not saw_asm:
+    raise SystemExit("asm dependency missing")
+
+build = one(root, "build")
+if build is None:
+    raise SystemExit("no build")
+for node in children(build, "extensions"):
+    build.remove(node)
+for node in children(build, "resources"):
+    build.remove(node)
+plugins = one(build, "plugins")
+if plugins is None:
+    raise SystemExit("no plugins")
+saw_compiler = False
+saw_jar = False
+for plugin in list(plugins):
+    art = text_of(plugin, "artifactId")
+    if art in drop:
+        plugins.remove(plugin)
+        continue
+    if art == "maven-compiler-plugin":
+        saw_compiler = True
+        config = one(plugin, "configuration")
+        if config is None:
+            raise SystemExit("compiler plugin has no configuration")
+        if text_of(config, "source") != "11" or text_of(config, "target") != "11":
+            raise SystemExit("compiler source/target is not 11")
+        if one(config, "release") is not None:
+            raise SystemExit("compiler release was added")
+    if art == "maven-jar-plugin":
+        saw_jar = True
+        for node in children(plugin, "executions"):
+            plugin.remove(node)
+        config = one(plugin, "configuration")
+        if config is None:
+            config = ET.SubElement(plugin, q("configuration"))
+        else:
+            for node in list(config):
+                config.remove(node)
+        archive = ET.SubElement(config, q("archive"))
+        manifest = ET.SubElement(archive, q("manifest"))
+        main = ET.SubElement(manifest, q("mainClass"))
+        main.text = "org.mvel2.sh.Main"
+        entries = ET.SubElement(archive, q("manifestEntries"))
+        module = ET.SubElement(entries, q("Automatic-Module-Name"))
+        module.text = "org.mvel2"
+if not saw_compiler or not saw_jar:
+    raise SystemExit("compiler or jar plugin missing")
+
+tree.write("pom.xml", encoding="utf-8", xml_declaration=True)
+pom = Path("pom.xml").read_text(encoding="utf-8")
+for needle in (
+    "<artifactId>asm</artifactId>",
+    "<version>9.11.1</version>",
+    "<source>11</source>",
+    "<target>11</target>",
+    "org.mvel2.sh.Main",
+    "org.mvel2",
+    "Automatic-Module-Name",
+):
+    if needle not in pom:
+        raise SystemExit("pom missing " + needle)
+for needle in (
+    "maven-shade-plugin",
+    "maven-bundle-plugin",
+    "maven-enforcer-plugin",
+    "<artifactId>wagon-webdav</artifactId>",
+    "junit",
+    "manifestFile",
+    "SNAPSHOT",
+    "build.properties",
+    "org.mvel2.asm",
+):
+    if needle in pom:
+        raise SystemExit("pom still contains " + needle)
+if list(Path(".").rglob("pom.xml")) != [Path("pom.xml")]:
+    raise SystemExit("unexpected extra pom")
+if list(Path(".").rglob("*.jar")):
+    raise SystemExit("prebuilt jar remains")
+PY
+
+%build -a
+cat > manifest-addition <<'EOF'
+Automatic-Module-Name: org.mvel2
+EOF
+jar ufm target/mvel2-%{version}.jar manifest-addition
+java --module-path target/mvel2-%{version}.jar --describe-module org.mvel2 > module-describe.txt
+# A versioned jar prints "name@version ... automatic", not "name automatic".
+grep -q '^org.mvel2' module-describe.txt || { cat module-describe.txt; exit 1; }
+grep -q ' automatic$' module-describe.txt || { cat module-describe.txt; exit 1; }
+if grep -q 'contains org.mvel2.asm' module-describe.txt; then
+	cat module-describe.txt
+	exit 1
+fi
+
+%install -a
 mkdir -p %{buildroot}%{_bindir}
-install -pm 755 %{SOURCE1} %{buildroot}%{_bindir}/%{name}
+cat > %{buildroot}%{_bindir}/mvel <<'EOF'
+#!/bin/sh
+exec java -cp %{_javadir}/mvel.jar:%{_javadir}/asm.jar org.mvel2.sh.Main "$@"
+EOF
+chmod 0755 %{buildroot}%{_bindir}/mvel
 
 %files -f .mfiles
-%{_bindir}/%{name}
-%doc LICENSE.txt
-
-%files javadoc -f .mfiles-javadoc
-%doc LICENSE.txt
-
-%changelog
-* Thu Dec 18 2014 gil cattaneo <puntogil@libero.it> 2.2.2-1
-- update to 2.2.2.Final
-
-* Sat Jun 07 2014 Fedora Release Engineering <rel-eng@lists.fedoraproject.org> - 2.1.6-3
-- Rebuilt for https://fedoraproject.org/wiki/Fedora_21_Mass_Rebuild
-
-* Fri May 09 2014 gil cattaneo <puntogil@libero.it> 2.1.6-2
-- fix rhbz#1095339
-
-* Mon Sep 16 2013 gil cattaneo <puntogil@libero.it> 2.1.6-1
-- update to 2.1.6.Final
-
-* Fri Jul 05 2013 gil cattaneo <puntogil@libero.it> 2.0.19-5
-- switch to XMvn
-- minor changes to adapt to current guideline
-
-* Thu Feb 14 2013 Fedora Release Engineering <rel-eng@lists.fedoraproject.org> - 2.0.19-4
-- Rebuilt for https://fedoraproject.org/wiki/Fedora_19_Mass_Rebuild
-
-* Wed Feb 06 2013 Java SIG <java-devel@lists.fedoraproject.org> - 2.0.19-3
-- Update for https://fedoraproject.org/wiki/Fedora_19_Maven_Rebuild
-- Replace maven BuildRequires with maven-local
-
-* Fri Jul 20 2012 Fedora Release Engineering <rel-eng@lists.fedoraproject.org> - 2.0.19-2
-- Rebuilt for https://fedoraproject.org/wiki/Fedora_18_Mass_Rebuild
-
-* Sat May 26 2012 gil cattaneo <puntogil@libero.it> 2.0.19-1
-- initial rpm
+%{_bindir}/mvel
+%doc README.md LICENSE.txt
